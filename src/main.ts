@@ -203,6 +203,7 @@ class LineBackend implements Backend {
 	private client: Client;
 	private flush: () => Promise<void>;
 	private notices: string[] = [];
+	private receiveQueue: Promise<void> = Promise.resolve();
 
 	constructor(created: Created, pendingNotices: string[] = []) {
 		this.client = created.client;
@@ -220,13 +221,15 @@ class LineBackend implements Backend {
 
 	start(): void {
 		this.client.on("message", (message) => {
-			this.onMessage(message).catch((error) =>
-				this.emit({
-					type: "notice",
-					kind: "error",
-					text: `受信処理エラー: ${errorText(error)}`,
-				})
-			);
+			this.receiveQueue = this.receiveQueue
+				.then(() => this.onMessage(message))
+				.catch((error) =>
+					this.emit({
+						type: "notice",
+						kind: "error",
+						text: `受信処理エラー: ${errorText(error)}`,
+					})
+				);
 		});
 		this.client.listen({
 			talk: true,
@@ -575,7 +578,6 @@ async function main(): Promise<number> {
 		console.error(
 			"このアプリは端末が必要です（パイプやリダイレクトでは動きません）。",
 		);
-		console.error(dim("UI だけ見たい場合は  deno task demo  をどうぞ。"));
 		return 1;
 	}
 

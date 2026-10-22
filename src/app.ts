@@ -1072,7 +1072,14 @@ export class App {
 			before,
 			limit: PAGE_SIZE,
 		});
-		const merged = older ? [...result.messages, ...previous] : result.messages;
+		let merged = older ? [...result.messages, ...previous] : result.messages;
+		if (!older) {
+			const newest = result.messages.at(-1);
+			const extra = newest
+				? previous.filter((item) => item.time > newest.time)
+				: previous;
+			if (extra.length) merged = [...merged, ...extra];
+		}
 		this.messages.set(mid, merged);
 		this.hasMore.set(mid, result.hasMore);
 		const first = merged[0];
@@ -1600,7 +1607,9 @@ export class App {
 
 	private async runPalette(label: string): Promise<void> {
 		const name = label.split(" ")[0] ?? label;
-		const rest = this.input.trim().slice(name.length).trim();
+		const trimmed = this.input.trim();
+		const head = trimmed.split(/\s+/)[0] ?? "";
+		const rest = trimmed.slice(head.length).trim();
 		this.setInput("");
 		await this.runCommand(rest ? `${name} ${rest}` : name);
 	}
@@ -1665,8 +1674,14 @@ export class App {
 
 	private onIncoming(chat: ChatItem, incoming: MessageItem): void {
 		const index = this.chats.findIndex((item) => item.mid === chat.mid);
-		if (index >= 0) this.chats[index] = { ...this.chats[index], ...chat };
-		else this.chats.push(chat);
+		if (index >= 0) {
+			const prev = this.chats[index];
+			this.chats[index] = {
+				...prev,
+				...chat,
+				unread: Math.max(prev.unread, chat.unread),
+			};
+		} else this.chats.push(chat);
 		this.sortChats();
 
 		const isOpen = this.openMid === chat.mid;
