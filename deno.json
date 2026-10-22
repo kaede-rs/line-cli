@@ -1,0 +1,15 @@
+{
+	"imports": {
+		"@evex/linejs": "jsr:@evex/linejs@^3.5.0",
+		"@evex/linejs/base": "jsr:@evex/linejs@^3.5.0/base",
+		"@evex/linejs/storage": "jsr:@evex/linejs@^3.5.0/storage"
+	},
+	"tasks": {
+		"start": "deno run --allow-env=Q_DEBUG,TERM,COLORTERM,TERM_PROGRAM,NO_COLOR,XDG_DATA_HOME,HOME,LINE_EMAIL,LINE_PASSWORD --allow-read=$HOME/.local/share/line-cli --allow-write=$HOME/.local/share/line-cli --allow-net=gf.line.naver.jp:443,legy.line-apps.com:443 src/main.ts",
+		"check": "deno check src/*.ts test/*.ts",
+	},
+	"fmt": {
+		"useTabs": true,
+		"lineWidth": 80
+	}
+}
