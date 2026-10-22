@@ -204,6 +204,8 @@ export function createTheme(
 		return params.length ? `\x1b[${params.join(";")}m` : "";
 	};
 
+	const styleCache = new WeakMap<Style, string>();
+
 	return {
 		name,
 		mode,
@@ -211,11 +213,15 @@ export function createTheme(
 		mono,
 		reset: mode === "none" && mono ? "" : "\x1b[0m",
 		sgr(style: Style): string {
+			const selfHit = styleCache.get(style);
+			if (selfHit !== undefined) return selfHit;
 			const key = keyOf(style);
-			const hit = cache.get(key);
-			if (hit !== undefined) return hit;
-			const value = build(style);
-			cache.set(key, value);
+			let value = cache.get(key);
+			if (value === undefined) {
+				value = build(style);
+				cache.set(key, value);
+			}
+			styleCache.set(style, value);
 			return value;
 		},
 	};

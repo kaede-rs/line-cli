@@ -59,8 +59,9 @@ export class Canvas {
 		const width = Math.max(1, graphemeWidth(ch));
 		const index = this.at(row, col);
 		const cur = this.cells[index];
-		if (cur && cur.w === 0 && col > 0) this.cells[index - 1] = BLANK;
-		if (cur && cur.w === 2 && col + 1 < this.cols) {
+		if (cur && cur.ch === ch && cur.w === width && cur.s === style) return;
+		if (cur.w === 0 && col > 0) this.cells[index - 1] = BLANK;
+		if (cur.w === 2 && col + 1 < this.cols) {
 			this.cells[index + 1] = BLANK;
 		}
 		this.cells[index] = { ch, w: width, s: style };
@@ -210,16 +211,23 @@ export class Canvas {
 	}
 }
 
+const styleKeyMemo = new WeakMap<Style, string>();
+
 function styleKey(style: Style): string {
-	return [
-		style.fg ?? "",
-		style.bg ?? "",
-		style.bold ? 1 : 0,
-		style.dim ? 1 : 0,
-		style.italic ? 1 : 0,
-		style.underline ? 1 : 0,
-		style.reverse ? 1 : 0,
-	].join("|");
+	let key = styleKeyMemo.get(style);
+	if (key === undefined) {
+		key = [
+			style.fg ?? "",
+			style.bg ?? "",
+			style.bold ? 1 : 0,
+			style.dim ? 1 : 0,
+			style.italic ? 1 : 0,
+			style.underline ? 1 : 0,
+			style.reverse ? 1 : 0,
+		].join("|");
+		styleKeyMemo.set(style, key);
+	}
+	return key;
 }
 
 function cut(text: string, max: number): string {

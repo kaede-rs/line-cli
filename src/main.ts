@@ -265,21 +265,23 @@ class LineBackend implements Backend {
 			Number(box.lastDeliveredMessageId?.deliveredTime ?? 0) > 0
 		);
 
-		await this.resolveUsers(
-			boxes.filter((box) => kindOf(box.midType) === "user").map((box) =>
-				box.id
+		await Promise.all([
+			this.resolveUsers(
+				boxes.filter((box) => kindOf(box.midType) === "user").map((box) =>
+					box.id
+				),
 			),
-		);
-		await this.resolveChats(
-			boxes.filter((box) => kindOf(box.midType) !== "user").map((box) =>
-				box.id
+			this.resolveChats(
+				boxes.filter((box) => kindOf(box.midType) !== "user").map((box) =>
+					box.id
+				),
 			),
-		);
-		await this.resolveUsers(
-			boxes
-				.map((box) => box.lastMessages?.[0]?.from)
-				.filter((mid): mid is string => Boolean(mid)),
-		);
+			this.resolveUsers(
+				boxes
+					.map((box) => box.lastMessages?.[0]?.from)
+					.filter((mid): mid is string => Boolean(mid)),
+			),
+		]);
 
 		const chats: ChatItem[] = [];
 		for (const box of boxes) {

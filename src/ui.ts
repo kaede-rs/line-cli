@@ -249,10 +249,21 @@ function makeStyles(theme: Theme) {
 
 type Styles = ReturnType<typeof makeStyles>;
 
+const stylesMemo = new WeakMap<Theme, Styles>();
+
+function stylesFor(theme: Theme): Styles {
+	let styles = stylesMemo.get(theme);
+	if (!styles) {
+		styles = makeStyles(theme);
+		stylesMemo.set(theme, styles);
+	}
+	return styles;
+}
+
 export function renderFrame(view: AppView, theme: Theme): Frame {
 	const cols = Math.max(20, Math.floor(view.cols));
 	const rows = Math.max(6, Math.floor(view.rows));
-	const S = makeStyles(theme);
+	const S = stylesFor(theme);
 	const canvas = new Canvas(cols, rows, S.app);
 	const hotspots: Hotspot[] = [];
 
@@ -402,7 +413,6 @@ function drawSidebar(
 	const { row, col, width, height } = area;
 	canvas.fillRect(row, col, width, height, S.panel);
 
-	// 検索フィールド
 	const filterRow = row;
 	const fieldCol = col + 1;
 	const fieldWidth = Math.max(6, width - 2);
@@ -523,7 +533,6 @@ function drawChatItem(
 		canvas.fillRect(row, col, width, height, { bg: theme.p.selectedBg });
 	}
 
-	// 左端のアクセントバー（開いている / 選択中）
 	const barStyle = selected
 		? S.selectedAccent
 		: { fg: opened ? theme.p.accent : theme.p.border, bg: theme.p.panelBg };
@@ -788,6 +797,38 @@ type RowSpec =
 		failed?: boolean;
 	};
 
+const wrapCache = new Map<string, { lines: string[]; width: number }>();
+
+export function bubbleLayout(body: string, width: number): {
+	lines: string[];
+	width: number;
+} {
+	const key = `${width}\u0000${body}`;
+	let hit = wrapCache.get(key);
+	if (hit === undefined) {
+		const lines = wrapText(body, width);
+		hit = {
+			lines,
+			width: 2 + Math.max(...lines.map((line) => cellWidth(line))),
+		};
+		if (wrapCache.size >= 1024) wrapCache.clear();
+		wrapCache.set(key, hit);
+	}
+	return hit;
+}
+
+const dayMemo = new Map<number, string>();
+
+function dayOf(time: number): string {
+	let day = dayMemo.get(time);
+	if (day === undefined) {
+		if (dayMemo.size >= 4096) dayMemo.clear();
+		day = new Date(time).toDateString();
+		dayMemo.set(time, day);
+	}
+	return day;
+}
+
 function buildMessageRows(
 	messages: MessageRow[],
 	unreadFrom: number,
@@ -806,9 +847,7 @@ function buildMessageRows(
 
 	messages.forEach((message, i) => {
 		const prev = messages[i - 1];
-		const dayChanged = !prev ||
-			new Date(prev.time).toDateString() !==
-				new Date(message.time).toDateString();
+		const dayChanged = !prev || dayOf(prev.time) !== dayOf(message.time);
 		if (dayChanged) {
 			specs.push({
 				t: "sep",
@@ -838,12 +877,11 @@ function buildMessageRows(
 			});
 		}
 
-		const lines = wrapText(message.body || " ", innerMax);
-		const bubbleWidth = clamp(
-			2 + Math.max(...lines.map((line) => cellWidth(line))),
-			4,
-			maxWidth,
+		const { lines, width: natural } = bubbleLayout(
+			message.body || " ",
+			innerMax,
 		);
+		const bubbleWidth = clamp(natural, 4, maxWidth);
 		const x = message.mine
 			? Math.max(leftPad, contentWidth - bubbleWidth - 1)
 			: leftPad + avatarCol;

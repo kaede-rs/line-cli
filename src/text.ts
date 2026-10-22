@@ -150,8 +150,13 @@ export function sanitize(text: string): string {
 		);
 }
 
+const DIRTY_TEXT =
+	/[\t\n\u0000-\u0008\u000b-\u001f\u007f-\u009f\u00a0\u2028\u2029\u202a-\u202e\u2066-\u2069]|\s{2,}/;
+
 export function singleLine(text: string): string {
-	return sanitize(text).replace(/\s+/g, " ").trim();
+	return DIRTY_TEXT.test(text)
+		? sanitize(text).replace(/\s+/g, " ").trim()
+		: text.trim();
 }
 
 const ANSI_STICKY = /^\x1b\[[0-9;:?]*[ -/]*[@-~]/y;
@@ -164,10 +169,10 @@ export function clipAnsi(text: string, max: number): string {
 	let styled = false;
 	while (i < text.length) {
 		if (text.charCodeAt(i) === 0x1b) {
-			const re = new RegExp(ANSI_STICKY.source, "y");
-			const hit = re.exec(text.slice(i));
+			ANSI_STICKY.lastIndex = 0;
+			const hit = ANSI_STICKY.exec(text.slice(i));
 			if (!hit) break;
-      out += hit[0];
+			out += hit[0];
 			styled = true;
 			i += hit[0].length;
 			continue;
