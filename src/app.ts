@@ -151,6 +151,11 @@ export class App {
 
 	async run(): Promise<number> {
 		await this.io.start();
+<<<<<<< Updated upstream
+=======
+		this.colorMode = this.detectColorMode();
+		this.theme = createTheme(this.themeName, this.colorMode);
+>>>>>>> Stashed changes
 		this.screen.setSize(this.io.cols, this.io.rows);
 
 		if (this.wantAutoTheme && this.io.queryBackground) {
@@ -984,7 +989,6 @@ export class App {
 		for (let i = 0; i < wrapped.starts.length; i++) {
 			if (wrapped.starts[i] <= this.inputCursor) lineIndex = i;
 		}
-		// 複数行を編集中は履歴ではなく行移動にする
 		if (wrapped.lines.length > 1) {
 			const target = clamp(lineIndex + direction, 0, wrapped.lines.length - 1);
 			if (target === lineIndex) return;
