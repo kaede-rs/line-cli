@@ -9,6 +9,7 @@ import {
 	type ChatKind,
 	formatBody,
 	type HistoryResult,
+	type MediaInfo,
 	type MessageItem,
 } from "./backend.ts";
 import { encodeQr, renderQrAnsi } from "./qr.ts";
@@ -188,6 +189,42 @@ function kindOf(value: unknown): ChatKind {
 	}
 }
 
+const STICKER_HOST = "https://stickershop.line-scdn.net/stickershop";
+
+export function stickerURLs(
+	stkid: string,
+	stkopt: string | undefined,
+	pkgid?: string,
+): string[] {
+	const urls: string[] = [];
+	const base = `${STICKER_HOST}/v1/sticker/${stkid}/android`;
+	if (stkopt === "A") urls.push(`${base}/sticker_animation.png`);
+	urls.push(`${base}/sticker.png`);
+	if (pkgid) {
+		urls.push(`${STICKER_HOST}/v1/product/${pkgid}/android/sticker@2x.png`);
+	}
+	return urls;
+}
+
+function flexImageUrl(value: unknown): string | undefined {
+	if (Array.isArray(value)) {
+		for (const item of value) {
+			const found = flexImageUrl(item);
+			if (found) return found;
+		}
+		return undefined;
+	}
+	if (value && typeof value === "object") {
+		const obj = value as Record<string, unknown>;
+		if (typeof obj.url === "string") return obj.url;
+		for (const item of Object.values(obj)) {
+			const found = flexImageUrl(item);
+			if (found) return found;
+		}
+	}
+	return undefined;
+}
+
 class LineBackend implements Backend {
 	me: { name: string; mid: string; status?: string } | null = null;
 
@@ -204,6 +241,10 @@ class LineBackend implements Backend {
 	private flush: () => Promise<void>;
 	private notices: string[] = [];
 	private receiveQueue: Promise<void> = Promise.resolve();
+	private stickerMeta = new Map<
+		string,
+		{ stkid: string; stkopt?: string; pkgid?: string }
+	>();
 
 	constructor(created: Created, pendingNotices: string[] = []) {
 		this.client = created.client;
@@ -415,8 +456,6 @@ class LineBackend implements Backend {
 		await this.flush().catch(() => {});
 	}
 
-	/* ---------------- 内部 ---------------- */
-
 	private contacts = new Map<
 		string,
 		{ displayName?: string; statusMessage?: string }
@@ -432,6 +471,86 @@ class LineBackend implements Backend {
 		return this.userNames.get(mid) ?? shortId(mid);
 	}
 
+	private mediaOf(raw: {
+		id: string;
+		contentType?: unknown;
+		contentMetadata?: Record<string, string>;
+	}): MediaInfo | undefined {
+		const type = String(raw.contentType ?? "").toUpperCase();
+		const meta = raw.contentMetadata ?? {};
+		if (type === "STICKER") {
+			if (!meta.STKID) return undefined;
+			this.stickerMeta.set(raw.id, {
+				stkid: meta.STKID,
+				stkopt: meta.STKOPT,
+				pkgid: meta.STKPKGID,
+			});
+			const [url] = stickerURLs(meta.STKID, meta.STKOPT, meta.STKPKGID);
+			return url ? { kind: "sticker", url } : undefined;
+		}
+		if (type === "IMAGE") return { kind: "image" };
+		if (type === "FLEX") {
+			try {
+				const imageUrl = flexImageUrl(JSON.parse(meta.FLEX_JSON ?? ""));
+				if (!imageUrl) return undefined;
+				return {
+					kind: "flex",
+					imageUrl,
+					caption: meta.ALT_TEXT ?? "[リッチメッセージ]",
+				};
+			} catch {
+				return undefined;
+			}
+		}
+		return undefined;
+	}
+
+	getMedia(item: MessageItem): Promise<Uint8Array | null> {
+		return this.fetchMedia(item);
+	}
+
+	private async fetchMedia(item: MessageItem): Promise<Uint8Array | null> {
+		try {
+			const media = item.media;
+			if (!media) return null;
+			if (media.kind === "sticker") return await this.fetchSticker(item);
+			if (media.kind === "flex") return await this.fetchUrl(media.imageUrl);
+			const file = await this.client.base.obs.downloadMessageData({
+				messageId: item.id,
+			});
+			return new Uint8Array(await file.arrayBuffer());
+		} catch {
+			return null;
+		}
+	}
+
+	private async fetchSticker(item: MessageItem): Promise<Uint8Array | null> {
+		const meta = this.stickerMeta.get(item.id);
+		const urls = meta
+			? stickerURLs(meta.stkid, meta.stkopt, meta.pkgid)
+			: item.media?.kind === "sticker"
+			? [item.media.url]
+			: [];
+		for (const url of urls) {
+			const bytes = await this.fetchUrl(url);
+			if (bytes) return bytes;
+		}
+		return null;
+	}
+
+	private async fetchUrl(
+		url: string | undefined,
+	): Promise<Uint8Array | null> {
+		if (!url) return null;
+		try {
+			const res = await fetch(url);
+			if (!res.ok) return null;
+			return new Uint8Array(await res.arrayBuffer());
+		} catch {
+			return null;
+		}
+	}
+
 	private toMessage(raw: {
 		id: string;
 		from?: string;
@@ -439,6 +558,7 @@ class LineBackend implements Backend {
 		text?: string;
 		contentType?: unknown;
 		createdTime?: unknown;
+		contentMetadata?: Record<string, string>;
 	}): MessageItem {
 		const mine = raw.from === this.me?.mid;
 		const time = Number(raw.createdTime ?? Date.now());
@@ -450,6 +570,7 @@ class LineBackend implements Backend {
 			body: this.bodyOf(raw),
 			mine,
 			status: "sent",
+			media: this.mediaOf(raw),
 		};
 	}
 
@@ -488,7 +609,6 @@ class LineBackend implements Backend {
 				chatMids: unknown,
 			});
 			for (const chat of chats) {
-				// memberMids は Record<mid, Int64> の形
 				const memberMids = (chat as {
 					extra?: { groupExtra?: { memberMids?: Record<string, unknown> } };
 				}).extra?.groupExtra?.memberMids;
@@ -549,6 +669,7 @@ class LineBackend implements Backend {
 				body,
 				mine: Boolean(message.isMyMessage),
 				status: "sent",
+				media: this.mediaOf(message.raw),
 			},
 		});
 	}

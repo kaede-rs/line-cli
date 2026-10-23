@@ -2,8 +2,11 @@
   "version": "5",
   "specifiers": {
     "jsr:@evex/linejs-types@^3.5.0": "3.5.0",
+    "jsr:@evex/linejs@*": "3.5.0",
     "jsr:@evex/linejs@^3.5.0": "3.5.0",
     "jsr:@evex/loose-types@^1.0.1": "1.0.1",
+    "jsr:@std/assert@1": "1.0.19",
+    "jsr:@std/internal@^1.0.12": "1.0.14",
     "npm:@noble/ciphers@^2.2.0": "2.4.0",
     "npm:@types/node-int64@~0.4.32": "0.4.32",
     "npm:@types/thrift@~0.10.17": "0.10.17",
@@ -43,6 +46,15 @@
     },
     "@evex/loose-types@1.0.1": {
       "integrity": "6f233f1af29a3f2c6c3ba8de3ce3b74d4dc660dc202ed8160a5522170333bd1d"
+    },
+    "@std/assert@1.0.19": {
+      "integrity": "eaada96ee120cb980bc47e040f82814d786fe8162ecc53c91d8df60b8755991e",
+      "dependencies": [
+        "jsr:@std/internal"
+      ]
+    },
+    "@std/internal@1.0.14": {
+      "integrity": "291516b3d4c35024d6ffbc0a9df5bf4c64116e05b50012cf846710152d2ffdf7"
     }
   },
   "npm": {

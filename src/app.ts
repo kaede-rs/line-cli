@@ -5,6 +5,8 @@ import type {
 	MessageItem,
 	NoticeKind,
 } from "./backend.ts";
+import { KittyEngine } from "./kitty.ts";
+import { type CellPx, MediaLoader } from "./media.ts";
 import { Screen } from "./screen.ts";
 import { cellWidth, chars, singleLine } from "./text.ts";
 import {
@@ -112,6 +114,9 @@ export class App {
 	private exitResolve: ((code: number) => void) | null = null;
 	private readonly exited: Promise<number>;
 	private unsubscribe: (() => void) | null = null;
+	private engine: KittyEngine | null = null;
+	private cellPx: CellPx | null = null;
+	private loader: MediaLoader | null = null;
 
 	constructor(options: AppOptions) {
 		this.io = options.io;
@@ -126,6 +131,7 @@ export class App {
 		this.exited = new Promise<number>((resolve) => {
 			this.exitResolve = resolve;
 		});
+		this.loader = new MediaLoader(this.backend);
 	}
 
 	private readonly wantAutoTheme: boolean;
@@ -151,11 +157,14 @@ export class App {
 
 	async run(): Promise<number> {
 		await this.io.start();
-<<<<<<< Updated upstream
-=======
+		const supported = await this.io.queryGraphics?.() ?? false;
+		if (supported) {
+			this.cellPx = await this.io.queryCellSize?.() ?? null;
+			this.engine = new KittyEngine((chunk) => this.io.write(chunk));
+			this.engine.enable(this.cellPx);
+		}
 		this.colorMode = this.detectColorMode();
 		this.theme = createTheme(this.themeName, this.colorMode);
->>>>>>> Stashed changes
 		this.screen.setSize(this.io.cols, this.io.rows);
 
 		if (this.wantAutoTheme && this.io.queryBackground) {
@@ -226,6 +235,7 @@ export class App {
 	private onResize(): void {
 		this.screen.setSize(this.io.cols, this.io.rows);
 		this.screen.invalidate();
+		this.engine?.dirty();
 		this.adjustScroll();
 		this.render();
 	}
@@ -253,6 +263,23 @@ export class App {
 		this.hotspots = frame.hotspots;
 		this.screen.setSize(this.io.cols, this.io.rows);
 		this.screen.draw(frame.lines, frame.cursor);
+		if (this.engine?.active) {
+			this.engine.frame(
+				frame.graphics.map((g) => ({
+					key: g.key,
+					rect: g.rect,
+					media: this.loader?.get(g.key),
+				})),
+			);
+			const openMid = this.openMid;
+			this.loader?.pump(
+				openMid ? this.messages.get(openMid) ?? [] : [],
+				(_mid, id, patch) => {
+					if (openMid) this.patchMessage(openMid, id, { media: patch });
+					this.scheduleRender();
+				},
+			);
+		}
 	}
 
 	private view(): AppView {
@@ -299,6 +326,7 @@ export class App {
 			palette: this.palette(),
 			now: Date.now(),
 			tick: this.tick,
+			cellPx: this.cellPx,
 		};
 	}
 
@@ -444,6 +472,7 @@ export class App {
 			this.unreadFrom.get(mid) ?? NONE,
 			Date.now(),
 			chat?.kind !== "user",
+			this.cellPx,
 		);
 	}
 
@@ -481,6 +510,7 @@ export class App {
 		if (ctrl && key === "char" && ch === "d") return this.quit(0);
 		if (ctrl && key === "char" && ch === "l") {
 			this.screen.invalidate();
+			this.engine?.dirty();
 			return;
 		}
 		if (this.overlay) return this.onOverlayKey(event);
@@ -1069,6 +1099,7 @@ export class App {
 				unreadBefore,
 				Date.now(),
 				chat?.kind !== "user",
+				this.cellPx,
 			)
 			: 0;
 
@@ -1096,6 +1127,7 @@ export class App {
 				unreadBefore + result.messages.length,
 				Date.now(),
 				chat?.kind !== "user",
+				this.cellPx,
 			);
 			this.unreadFrom.set(mid, unreadBefore + result.messages.length);
 			this.msgScroll += Math.max(0, afterRows - beforeRows);
@@ -1297,6 +1329,7 @@ export class App {
 		this.themeName = order[(index + 1) % order.length];
 		this.theme = createTheme(this.themeName, this.colorMode);
 		this.screen.invalidate();
+		this.engine?.dirty();
 		this.toast(`テーマ: ${this.themeName}`, "info");
 	}
 
@@ -1564,6 +1597,7 @@ export class App {
 						this.themeName = name;
 						this.theme = createTheme(name, this.colorMode);
 						this.screen.invalidate();
+						this.engine?.dirty();
 						this.toast(`テーマ: ${name}`, "success");
 						return;
 					}
@@ -1580,7 +1614,10 @@ export class App {
 				name: "/redraw",
 				aliases: [],
 				description: "画面を描き直す",
-				run: () => this.screen.invalidate(),
+				run: () => {
+					this.screen.invalidate();
+					this.engine?.dirty();
+				},
 			},
 			{
 				name: "/quit",
@@ -1698,7 +1735,14 @@ export class App {
 			const unread = this.unreadFrom.get(chat.mid) ?? NONE;
 			const grouped = chat.kind !== "user";
 			const before = this.msgScroll > 0
-				? countMessageRows(list, width, unread, Date.now(), grouped)
+				? countMessageRows(
+					list,
+					width,
+					unread,
+					Date.now(),
+					grouped,
+					this.cellPx,
+				)
 				: 0;
 			const next = [...list, incoming];
 			this.messages.set(chat.mid, next);
@@ -1709,6 +1753,7 @@ export class App {
 					unread,
 					Date.now(),
 					grouped,
+					this.cellPx,
 				);
 				this.msgScroll += Math.max(0, after - before);
 			}

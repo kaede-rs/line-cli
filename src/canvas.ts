@@ -176,7 +176,6 @@ export class Canvas {
 	}
 
 	render(theme: Theme): string[] {
-		// 背景を塗るテーマでは行末の空白も出力する必要がある
 		const canTrim = this.base.bg === undefined || this.base.bg === DEFAULT;
 		const out: string[] = [];
 		for (let r = 0; r < this.rows; r++) {

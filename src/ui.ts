@@ -15,7 +15,14 @@ import {
 	wrapText,
 } from "./text.ts";
 import { DEFAULT, type Style, type Theme } from "./theme.ts";
-import type { ChatKind, MessageStatus, NoticeKind } from "./backend.ts";
+import type {
+	ChatKind,
+	MessageItem,
+	MessageStatus,
+	NoticeKind,
+} from "./backend.ts";
+import { type CellPx, mediaCellSize } from "./media.ts";
+import { type Rect } from "./kitty.ts";
 
 export type Focus = "list" | "filter" | "input";
 
@@ -40,6 +47,7 @@ export type MessageRow = {
 	read?: boolean;
 	status?: MessageStatus;
 	label?: string;
+	media?: MessageItem["media"];
 };
 
 export type ToastItem = { id: number; kind: NoticeKind; text: string };
@@ -91,6 +99,7 @@ export type AppView = {
 	palette: { items: PaletteItem[]; selected: number } | null;
 	now: number;
 	tick: number;
+	cellPx: CellPx | null;
 };
 
 export type Region = {
@@ -146,6 +155,7 @@ export type Frame = {
 	cursor: CursorState;
 	hotspots: Hotspot[];
 	layout: Layout;
+	graphics: Array<{ key: string; bid: string; rect: Rect }>;
 };
 
 const AVATAR_WIDTH = 3;
@@ -207,8 +217,10 @@ function makeStyles(theme: Theme) {
 		} as Style,
 		bubbleMine: { fg: p.bubbleMineFg, bg: p.bubbleMineBg } as Style,
 		bubbleMineEdge: { fg: p.bubbleMineBg, bg: p.appBg } as Style,
+		bubbleMineDim: { fg: p.textDim, bg: p.bubbleMineBg } as Style,
 		bubbleOther: { fg: p.bubbleOtherFg, bg: p.bubbleOtherBg } as Style,
 		bubbleOtherEdge: { fg: p.bubbleOtherBg, bg: p.appBg } as Style,
+		bubbleOtherDim: { fg: p.textDim, bg: p.bubbleOtherBg } as Style,
 		input: { fg: p.text, bg: p.inputBg } as Style,
 		inputDim: { fg: p.textFaint, bg: p.inputBg } as Style,
 		inputAccent: { fg: p.accent, bg: p.inputBg, bold: true } as Style,
@@ -266,6 +278,7 @@ export function renderFrame(view: AppView, theme: Theme): Frame {
 	const S = stylesFor(theme);
 	const canvas = new Canvas(cols, rows, S.app);
 	const hotspots: Hotspot[] = [];
+	const graphics: Frame["graphics"] = [];
 
 	const mobile = cols < 74;
 	const body: Region = { row: 1, col: 0, width: cols, height: rows - 2 };
@@ -317,7 +330,7 @@ export function renderFrame(view: AppView, theme: Theme): Frame {
 		layout.list = drawn.list;
 	}
 	if (main) {
-		const drawn = drawMain(canvas, view, theme, S, main, hotspots);
+		const drawn = drawMain(canvas, view, theme, S, main, hotspots, graphics);
 		layout.messages = drawn.messages;
 		layout.input = drawn.input;
 		layout.scrollbar = drawn.scrollbar;
@@ -337,6 +350,7 @@ export function renderFrame(view: AppView, theme: Theme): Frame {
 		cursor: caretFor(view, layout),
 		hotspots,
 		layout,
+		graphics,
 	};
 }
 
@@ -635,6 +649,7 @@ function drawMain(
 	S: Styles,
 	area: Region,
 	hotspots: Hotspot[],
+	graphics: Frame["graphics"],
 ): {
 	messages: Region | null;
 	input: Layout["input"];
@@ -681,6 +696,7 @@ function drawMain(
 		view.now,
 		chat.kind !== "user",
 		Math.max(8, area.width - SCROLL_GUTTER),
+		view.cellPx,
 	);
 	const scrollbar = drawMessages(
 		canvas,
@@ -690,6 +706,7 @@ function drawMain(
 		messages,
 		specs,
 		hotspots,
+		graphics,
 	);
 	drawInputBox(canvas, view, S, input, wrapped.lines, hotspots);
 
@@ -795,6 +812,17 @@ type RowSpec =
 		meta?: string;
 		metaX?: number;
 		failed?: boolean;
+	}
+	| {
+		t: "media";
+		x: number;
+		width: number;
+		rows: number;
+		mine: boolean;
+		key: string;
+		bid: string;
+		caption?: string;
+		kind: "image" | "sticker" | "flex";
 	};
 
 const wrapCache = new Map<string, { lines: string[]; width: number }>();
@@ -835,6 +863,7 @@ function buildMessageRows(
 	now: number,
 	grouped: boolean,
 	contentWidth: number,
+	cellPx: CellPx | null = null,
 ): RowSpec[] {
 	const specs: RowSpec[] = [];
 	const leftPad = 2;
@@ -877,54 +906,85 @@ function buildMessageRows(
 			});
 		}
 
-		const { lines, width: natural } = bubbleLayout(
-			message.body || " ",
-			innerMax,
-		);
-		const bubbleWidth = clamp(natural, 4, maxWidth);
-		const x = message.mine
-			? Math.max(leftPad, contentWidth - bubbleWidth - 1)
-			: leftPad + avatarCol;
-		const meta = message.status === "sending"
-			? "送信中…"
-			: message.status === "failed"
-			? "送信失敗"
-			: `${message.read ? "既読 " : ""}${clock(message.time)}`;
-		const metaX = message.mine
-			? clamp(x - cellWidth(meta) - 1, 0, contentWidth)
-			: x + bubbleWidth + 1;
+		const media = message.media;
+		let x: number;
+		if (media && media.pw && media.ph && !media.error) {
+			const key = media.kind === "sticker" ? media.url : message.id;
+			const fit = mediaCellSize(
+				{ pw: media.pw, ph: media.ph },
+				maxWidth,
+				cellPx,
+			);
+			const rows = Math.max(1, fit.rows);
+			const caption = media.kind === "flex" ? media.caption : undefined;
+			const total = rows + (caption ? 1 : 0);
+			x = message.mine
+				? Math.max(leftPad, contentWidth - fit.cols - 1)
+				: leftPad + avatarCol;
+			const spec = {
+				t: "media" as const,
+				x,
+				width: fit.cols,
+				rows: total,
+				mine: message.mine,
+				key,
+				bid: message.id,
+				kind: media.kind,
+			};
+			for (let r = 0; r < rows; r++) {
+				specs.push({ ...spec, caption: undefined });
+			}
+			if (caption) specs.push({ ...spec, caption });
+		} else {
+			const { lines, width: natural } = bubbleLayout(
+				message.body || " ",
+				innerMax,
+			);
+			const bubbleWidth = clamp(natural, 4, maxWidth);
+			x = message.mine
+				? Math.max(leftPad, contentWidth - bubbleWidth - 1)
+				: leftPad + avatarCol;
+			const meta = message.status === "sending"
+				? "送信中…"
+				: message.status === "failed"
+				? "送信失敗"
+				: `${message.read ? "既読 " : ""}${clock(message.time)}`;
+			const metaX = message.mine
+				? clamp(x - cellWidth(meta) - 1, 0, contentWidth)
+				: x + bubbleWidth + 1;
 
-		specs.push({
-			t: "bubble",
-			edge: "top",
-			x,
-			width: bubbleWidth,
-			text: "",
-			mine: message.mine,
-			failed: message.status === "failed",
-		});
-		lines.forEach((line, index) => {
 			specs.push({
 				t: "bubble",
-				edge: "mid",
+				edge: "top",
 				x,
 				width: bubbleWidth,
-				text: line,
+				text: "",
 				mine: message.mine,
-				meta: index === lines.length - 1 ? meta : undefined,
-				metaX: index === lines.length - 1 ? metaX : undefined,
 				failed: message.status === "failed",
 			});
-		});
-		specs.push({
-			t: "bubble",
-			edge: "bottom",
-			x,
-			width: bubbleWidth,
-			text: "",
-			mine: message.mine,
-			failed: message.status === "failed",
-		});
+			lines.forEach((line, index) => {
+				specs.push({
+					t: "bubble",
+					edge: "mid",
+					x,
+					width: bubbleWidth,
+					text: line,
+					mine: message.mine,
+					meta: index === lines.length - 1 ? meta : undefined,
+					metaX: index === lines.length - 1 ? metaX : undefined,
+					failed: message.status === "failed",
+				});
+			});
+			specs.push({
+				t: "bubble",
+				edge: "bottom",
+				x,
+				width: bubbleWidth,
+				text: "",
+				mine: message.mine,
+				failed: message.status === "failed",
+			});
+		}
 		if (message.label) {
 			specs.push({
 				t: "name",
@@ -948,6 +1008,7 @@ function drawMessages(
 	area: Region,
 	specs: RowSpec[],
 	hotspots: Hotspot[],
+	graphics: Frame["graphics"],
 ): Layout["scrollbar"] {
 	canvas.fillRect(area.row, area.col, area.width, area.height, S.app);
 	const total = specs.length;
@@ -1007,6 +1068,35 @@ function drawMessages(
 					bg: theme.p.appBg,
 					bold: true,
 				}, { max: contentWidth - spec.x });
+				return;
+			}
+			case "media": {
+				const bodyStyle = spec.mine ? S.bubbleMine : S.bubbleOther;
+				const x = area.col + spec.x;
+				canvas.fillRect(row, x, spec.width, 1, bodyStyle);
+				if (spec.caption) {
+					const dimStyle = spec.mine ? S.bubbleMineDim : S.bubbleOtherDim;
+					canvas.text(row, x + 1, spec.caption, dimStyle, {
+						max: Math.max(1, spec.width - 2),
+					});
+				} else {
+					const last = graphics[graphics.length - 1];
+					if (
+						last && last.bid === spec.bid &&
+						last.key === spec.key &&
+						last.rect.col === x &&
+						last.rect.cols === spec.width &&
+						last.rect.row + last.rect.rows === row
+					) {
+						last.rect.rows++;
+					} else {
+						graphics.push({
+							key: spec.key,
+							bid: spec.bid,
+							rect: { row, col: x, cols: spec.width, rows: 1 },
+						});
+					}
+				}
 				return;
 			}
 			case "bubble": {
@@ -1096,6 +1186,7 @@ export function countMessageRows(
 	unreadFrom = messages.length,
 	now = Date.now(),
 	grouped = false,
+	cellPx: CellPx | null = null,
 ): number {
 	return buildMessageRows(
 		messages,
@@ -1103,6 +1194,7 @@ export function countMessageRows(
 		now,
 		grouped,
 		Math.max(8, contentWidth),
+		cellPx,
 	).length;
 }
 

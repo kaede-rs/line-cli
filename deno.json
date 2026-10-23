@@ -5,7 +5,7 @@
 		"@evex/linejs/storage": "jsr:@evex/linejs@^3.5.0/storage"
 	},
 	"tasks": {
-		"start": "deno run --allow-env=Q_DEBUG,TERM,COLORTERM,TERM_PROGRAM,NO_COLOR,XDG_DATA_HOME,HOME,LINE_EMAIL,LINE_PASSWORD --allow-read=$HOME/.local/share/line-cli --allow-write=$HOME/.local/share/line-cli --allow-net=gf.line.naver.jp:443,legy.line-apps.com:443 src/main.ts",
+		"start": "deno run --allow-env=Q_DEBUG,TERM,COLORTERM,TERM_PROGRAM,NO_COLOR,XDG_DATA_HOME,HOME,LINE_EMAIL,LINE_PASSWORD --allow-read=$HOME/.local/share/line-cli --allow-write=$HOME/.local/share/line-cli --allow-net=gf.line.naver.jp:443,legy.line-apps.com:443,obs.line-apps.com:443,stickershop.line-scdn.net:443 src/main.ts",
 		"check": "deno check src/*.ts test/*.ts",
 	},
 	"fmt": {

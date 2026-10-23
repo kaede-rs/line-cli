@@ -107,8 +107,40 @@ export function parseEvents(input: string): {
 
 type EscapeResult = { event: InputEvent | null; size: number } | "more" | null;
 
-const CSI_KEY: Record<string, KeyName> = {A:"up",B:"down",C:"right",D:"left",F:"end",H:"home",P:"f1",Q:"f2",R:"f3",S:"f4"};
-const CSI_NUMBER: Record<string, KeyName> = {1:"home",2:"insert",3:"delete",4:"end",5:"pageup",6:"pagedown",7:"home",8:"end",11:"f1",12:"f2",13:"f3",14:"f4",15:"f5",17:"f6",18:"f7",19:"f8",20:"f9",21:"f10",23:"f11",24:"f12"};
+const CSI_KEY: Record<string, KeyName> = {
+	A: "up",
+	B: "down",
+	C: "right",
+	D: "left",
+	F: "end",
+	H: "home",
+	P: "f1",
+	Q: "f2",
+	R: "f3",
+	S: "f4",
+};
+const CSI_NUMBER: Record<string, KeyName> = {
+	1: "home",
+	2: "insert",
+	3: "delete",
+	4: "end",
+	5: "pageup",
+	6: "pagedown",
+	7: "home",
+	8: "end",
+	11: "f1",
+	12: "f2",
+	13: "f3",
+	14: "f4",
+	15: "f5",
+	17: "f6",
+	18: "f7",
+	19: "f8",
+	20: "f9",
+	21: "f10",
+	23: "f11",
+	24: "f12",
+};
 
 function modifiers(
 	value: number,
@@ -149,7 +181,7 @@ function parseEscape(buf: string): EscapeResult {
 	}
 
 	if (next !== 0x5b) {
-    const event = controlEvent(next, true);
+		const event = controlEvent(next, true);
 		if (event) return { event, size: 2 };
 		const ch = Array.from(buf.slice(1))[0] ?? "";
 		return {
@@ -200,7 +232,7 @@ function parseEscape(buf: string): EscapeResult {
 	while (i < buf.length) {
 		const c = buf.charCodeAt(i);
 		if (c >= 0x20 && c <= 0x2f) {
-      i++;
+			i++;
 			continue;
 		}
 		break;
@@ -307,6 +339,10 @@ export interface Io {
 	onEvent(handler: (event: InputEvent) => void): void;
 	onResize(handler: () => void): void;
 	queryBackground?(): Promise<"dark" | "light" | null>;
+	queryGraphics?(options?: { timeoutMs?: number }): Promise<boolean>;
+	queryCellSize?(
+		options?: { timeoutMs?: number },
+	): Promise<{ w: number; h: number } | null>;
 }
 
 export type TerminalOptions = {
@@ -316,6 +352,10 @@ export type TerminalOptions = {
 
 const MOUSE_ON = "\x1b[?1000h\x1b[?1002h\x1b[?1006h";
 const MOUSE_OFF = "\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?1000l";
+
+const KITTY_CLEAR = "\x1b_Ga=d,d=A,q=1\x1b\\";
+const QUERY_TIMEOUT = 300;
+type CellSize = { w: number; h: number };
 
 export class Terminal implements Io {
 	cols = 80;
@@ -334,6 +374,9 @@ export class Terminal implements Io {
 	private escTimeout: number;
 	private bgWaiters: ((value: "dark" | "light" | null) => void)[] = [];
 	private bgResult: "dark" | "light" | null | undefined;
+	private graphicsWaiters: ((value: boolean) => void)[] = [];
+	private probeWaiters: ((value: boolean) => void)[] = [];
+	private cellWaiters: ((value: CellSize | null) => void)[] = [];
 	private sizeTimer: ReturnType<typeof setInterval> | undefined;
 	private signalCleanups: (() => void)[] = [];
 
@@ -418,7 +461,8 @@ export class Terminal implements Io {
 		if (this.sizeTimer !== undefined) clearInterval(this.sizeTimer);
 		for (const cleanup of this.signalCleanups.splice(0)) cleanup();
 		this.write(
-			(this.mouse ? MOUSE_OFF : "") +
+			KITTY_CLEAR +
+				(this.mouse ? MOUSE_OFF : "") +
 				"\x1b[?2004l\x1b[0 q\x1b[?25h\x1b[0m\x1b[?1049l",
 		);
 		if (this.raw) {
@@ -465,6 +509,52 @@ export class Terminal implements Io {
 		});
 	}
 
+	queryGraphics(options: { timeoutMs?: number } = {}): Promise<boolean> {
+		return new Promise((resolve) => {
+			let settled = false;
+			const finish = (value: boolean) => {
+				if (settled) return;
+				settled = true;
+				clearTimeout(timer);
+				let index = this.graphicsWaiters.indexOf(finish);
+				if (index >= 0) this.graphicsWaiters.splice(index, 1);
+				index = this.probeWaiters.indexOf(finish);
+				if (index >= 0) this.probeWaiters.splice(index, 1);
+				resolve(value);
+			};
+			const timer = setTimeout(
+				() => finish(false),
+				options.timeoutMs ?? QUERY_TIMEOUT,
+			);
+			this.graphicsWaiters.push(finish);
+			this.probeWaiters.push(finish);
+			this.write("\x1b_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\");
+			this.write("\x1b[c");
+		});
+	}
+
+	queryCellSize(
+		options: { timeoutMs?: number } = {},
+	): Promise<CellSize | null> {
+		return new Promise((resolve) => {
+			let settled = false;
+			const finish = (value: CellSize | null) => {
+				if (settled) return;
+				settled = true;
+				clearTimeout(timer);
+				const index = this.cellWaiters.indexOf(finish);
+				if (index >= 0) this.cellWaiters.splice(index, 1);
+				resolve(value);
+			};
+			const timer = setTimeout(
+				() => finish(null),
+				options.timeoutMs ?? QUERY_TIMEOUT,
+			);
+			this.cellWaiters.push(finish);
+			this.write("\x1b[16t");
+		});
+	}
+
 	private emit(event: InputEvent): void {
 		for (const handler of this.handlers.slice()) handler(event);
 	}
@@ -492,9 +582,68 @@ export class Terminal implements Io {
 	}
 
 	feed(text: string): void {
-		const cleaned = this.takeOsc(text);
-		this.buffer += cleaned;
+		this.buffer += this.takeOsc(text);
+		this.takeApc();
+		this.takeReport();
 		this.flushBuffer();
+	}
+
+	private takeApc(): void {
+		for (;;) {
+			const start = this.buffer.indexOf("\x1b_G");
+			if (start < 0) return;
+			const tail = this.buffer.slice(start);
+			const bel = tail.indexOf("\x07", 2);
+			const st = tail.indexOf("\x1b\\", 2);
+			const useBel = bel >= 0 && (st < 0 || bel < st);
+			const at = useBel ? bel : st;
+			if (at < 0) return;
+			const payload = tail.slice(2, at);
+			this.buffer = this.buffer.slice(0, start) +
+				tail.slice(at + (useBel ? 1 : 2));
+			this.handleGraphics(payload);
+		}
+	}
+
+	private takeReport(): void {
+		let from = 0;
+		for (;;) {
+			const start = this.buffer.indexOf("\x1b[", from);
+			if (start < 0) return;
+			let i = start + 2;
+			while (
+				i < this.buffer.length &&
+				this.buffer.charCodeAt(i) >= 0x30 &&
+				this.buffer.charCodeAt(i) <= 0x3f
+			) {
+				i++;
+			}
+			if (i >= this.buffer.length) return;
+			const params = this.buffer.slice(start + 2, i);
+			const final = this.buffer[i];
+			const isResponse = (params.startsWith(">") || params.startsWith("?")) &&
+				(final === "c" || final === "t");
+			if (!isResponse) {
+				from = i + 1;
+				continue;
+			}
+			if (final === "c") {
+				this.buffer = this.buffer.slice(0, start) +
+					this.buffer.slice(i + 1);
+				from = 0;
+				this.handleProbe();
+				continue;
+			}
+			const parts = params.slice(1).split(";");
+			if (params.startsWith("?") && parts[0] === "6" && parts.length === 3) {
+				this.buffer = this.buffer.slice(0, start) +
+					this.buffer.slice(i + 1);
+				from = 0;
+				this.handleCellSize(Number(parts[1]), Number(parts[2]));
+				continue;
+			}
+			from = i + 1;
+		}
 	}
 
 	private takeOsc(text: string): string {
@@ -532,6 +681,22 @@ export class Terminal implements Io {
 		if (!rgb || !this.bgWaiters.length) return;
 		const value = backgroundFromRgb(rgb[0], rgb[1], rgb[2]);
 		for (const waiter of this.bgWaiters.splice(0)) waiter(value);
+	}
+
+	private handleGraphics(payload: string): void {
+		if (!this.graphicsWaiters.length) return;
+		if (!payload.includes("i=31")) return;
+		for (const waiter of this.graphicsWaiters.splice(0)) waiter(true);
+	}
+
+	private handleProbe(): void {
+		if (!this.probeWaiters.length) return;
+		for (const waiter of this.probeWaiters.splice(0)) waiter(false);
+	}
+
+	private handleCellSize(h: number, w: number): void {
+		if (!this.cellWaiters.length) return;
+		for (const waiter of this.cellWaiters.splice(0)) waiter({ w, h });
 	}
 
 	private flushBuffer(): void {

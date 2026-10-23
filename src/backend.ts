@@ -14,6 +14,11 @@ export type ChatItem = {
 
 export type MessageStatus = "sending" | "sent" | "failed";
 
+export type MediaInfo =
+	| { kind: "image" }
+	| { kind: "sticker"; url: string }
+	| { kind: "flex"; imageUrl?: string; caption: string };
+
 export type MessageItem = {
 	id: string;
 	time: number;
@@ -23,6 +28,7 @@ export type MessageItem = {
 	read?: boolean;
 	status?: MessageStatus;
 	label?: string;
+	media?: MediaInfo & { pw?: number; ph?: number; error?: boolean };
 };
 
 export type NoticeKind = "info" | "success" | "warn" | "error";
@@ -45,6 +51,7 @@ export interface Backend {
 	>;
 	send(mid: string, text: string): Promise<string>;
 	markRead(mid: string, messageId: string): Promise<void>;
+	getMedia(item: MessageItem): Promise<Uint8Array | null>;
 	chatInfo(mid: string): Promise<{ title: string; rows: [string, string][] }>;
 	subscribe(handler: (event: BackendEvent) => void): () => void;
 	close(): Promise<void>;
